@@ -553,8 +553,29 @@ class HCDevice:
         return values
 
     def run_forever(self, on_message, on_open, on_close):
+        interesting_ones = ['BSH.Common.Option.ProgramProgress',
+                            'BSH.Common.Option.RemainingProgramTime',
+                            'BSH.Common.Status.Program.All.Count.Started',
+                            'Dishcare.Dishwasher.Status.ProgramPhase',
+                            'BSH.Common.Root.SelectedProgram',
+                            'BSH.Common.Status.OperationState',
+                            'BSH.Common.Option.StartInRelative',
+                            'deviceID']
+
+
+
+
         def _on_message(ws, message):
             values = self.handle_message(message)
+
+            for key, value in values.items():
+              if key in interesting_ones:
+                    print("FOUND:" + key + ":"+ str(value) + "\n")
+                    f = open('BSH_' + "_"+ key + '.dat', 'w', encoding="utf-8")
+                    f.write(f'{str(value)}\n')
+                    f.flush()
+                    f.close()
+
             on_message(values)
 
         def _on_open(ws):
