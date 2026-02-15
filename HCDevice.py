@@ -568,6 +568,12 @@ class HCDevice:
         def _on_message(ws, message):
             values = self.handle_message(message)
 
+
+            g = open('message.dat', 'a', encoding="utf-8")
+            g.write(f'{str(message)}\n')
+            g.flush()
+            g.close()
+
             for key, value in values.items():
               if key in interesting_ones:
                     print("FOUND:" + key + ":"+ str(value) + "\n")
