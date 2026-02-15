@@ -562,25 +562,39 @@ class HCDevice:
                             'BSH.Common.Option.StartInRelative',
                             'deviceID']
 
-
-
-
         def _on_message(ws, message):
             values = self.handle_message(message)
-
 
             g = open('message.dat', 'a', encoding="utf-8")
             g.write(f'{str(message)}\n')
             g.flush()
             g.close()
 
+            h = open('message.values', 'a', encoding="utf-8")
+            h.write("{ 'ts': '")
+            ms = time.time_ns() // 1_000_000
+            h.write(f"{ms}'")
+            comma = ','
+
             for key, value in values.items():
-              if key in interesting_ones:
-                    print("FOUND:" + key + ":"+ str(value) + "\n")
-                    f = open('BSH_' + "_"+ key + '.dat', 'w', encoding="utf-8")
+
+                h.write(comma)
+                h.write("'")
+                h.write(f"{key}")
+                h.write("':'")
+                h.write(f"{str(value)}")
+                h.write("'")
+
+                if key in interesting_ones:
+                    print("FOUND:" + key + ":" + str(value) + "\n")
+                    f = open('BSH_' + "_" + key + '.dat', 'w', encoding="utf-8")
                     f.write(f'{str(value)}\n')
                     f.flush()
                     f.close()
+
+            h.write("}\n")
+            h.flush()
+            h.close()
 
             on_message(values)
 
