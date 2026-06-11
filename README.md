@@ -498,3 +498,66 @@ MQTT auto-discovery messages. With `ha_discovery = True` in `config.ini` or by
 passing `--ha-discovery` on the commandline, `hcpy` will publish
 [HA discovery messages](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
 for each recognised property of your devices.
+
+## MQTT to Kafka (Avro)
+
+`hc2kafka.py` is an optional bridge that runs *alongside* `hc2mqtt.py`. It
+subscribes to the MQTT feed that `hc2mqtt.py` publishes, turns the terse
+topic/payload pairs back into comprehensible records, and produces them to
+Kafka as Avro using the Confluent wire format (so a Kafka Connect Avro sink can
+consume them directly).
+
+It reloads `config/devices.json` to restore the original feature names, so the
+MQTT topic `homeconnect/dishwasher/state/bsh_common_status_doorstate` becomes a
+record with `property: "BSH.Common.Status.DoorState"` and `name: "DoorState"`.
+String payloads are additionally given a typed view where unambiguous (`True` /
+`Off` → `value_bool`, `82` → `value_double`); enums and leading-zero program
+codes are left as strings.
+
+### Install
+
+The Kafka dependencies are kept separate from the core bridge:
+
+```bash
+pip3 install -r requirements-kafka.txt
+```
+
+### Run
+
+```bash
+hc2kafka.py --config config.ini
+```
+
+The MQTT options (`mqtt_host`, `mqtt_username`, `mqtt_prefix`, ...) are the same
+as `hc2mqtt.py`, so the existing `config.ini` can be shared. Every option can
+also be supplied as an `HCKAFKA_`-prefixed environment variable. Kafka-specific
+options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--kafka_bootstrap` | `badger:9092` | Kafka broker(s). |
+| `--schema_registry_url` | `http://badger:8081` | Confluent Schema Registry endpoint. |
+| `--kafka_topic_prefix` | `homeconnect.` | One topic per device: `<prefix><device>`, e.g. `homeconnect.dishwasher`. |
+| `--kafka_clientname` | `hc2kafka` | MQTT client id for the bridge. Deliberately **not** read from the shared `mqtt_clientname` key, so it never collides with `hc2mqtt.py` when both share `config.ini`. |
+
+### Record format
+
+Each message is keyed by device name and serialized against this Avro schema
+(registered per topic under the `<topic>-value` subject):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `device` | string | e.g. `dishwasher` (`_bridge` for the bridge-level LWT). |
+| `category` | string | `state`, `event`, or `connectivity` (LWT). |
+| `property` | string | Restored dotted name, e.g. `BSH.Common.Status.DoorState`. |
+| `property_raw` | string | The raw MQTT topic segment. |
+| `name` | string | Short name, e.g. `DoorState`. |
+| `value` | null \| string | Canonical string value. |
+| `value_double` | null \| double | Set when the value is numeric. |
+| `value_bool` | null \| boolean | Set when the value is boolean-like. |
+| `event_type` | null \| string | Set for `event` messages. |
+| `ts_epoch_ms` | long | Receive time, epoch milliseconds (UTC). |
+| `ts_iso` | string | Receive time, ISO-8601 (UTC). |
+
+> If your Schema Registry requires authentication, add `basic.auth.user.info` to
+> the `SchemaRegistryClient` configuration in `hc2kafka.py`.

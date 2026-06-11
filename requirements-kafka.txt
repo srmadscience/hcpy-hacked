@@ -1,0 +1,10 @@
+# Extra deps for hc2kafka.py (the MQTT -> Kafka/Avro bridge).
+# Kept separate from requirements.txt so the core hc2mqtt bridge and its
+# Docker image stay lean.
+# The [schemaregistry] extra pulls in the HTTP transport (httpx/authlib) and the
+# [avro] extra pulls in fastavro for the AvroSerializer.
+confluent-kafka[schemaregistry,avro]
+# plus the shared MQTT/config deps already in requirements.txt:
+paho.mqtt==1.6.1
+click
+click-config-file
