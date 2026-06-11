@@ -15,6 +15,7 @@
 import json
 import ssl
 import sys
+import time
 from datetime import datetime, timezone
 
 import click
@@ -257,6 +258,11 @@ def hc2kafka(
                 on_delivery=on_delivery,
             )
             producer.poll(0)
+            # Space records by >=1ms so every record gets a distinct ts_epoch_ms
+            # (and therefore a distinct event_time). This prevents the CrateDB
+            # primary key (device, property_raw, event_time) from colliding when
+            # the same property is reported twice within the same millisecond.
+            time.sleep(0.001)
             if debug:
                 kprint(f"{topic} <- {record}")
         except Exception as e:
