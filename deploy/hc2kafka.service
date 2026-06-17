@@ -1,0 +1,56 @@
+[Unit]
+# hcpy MQTT -> Kafka (Avro) bridge.
+# Install with deploy/install-hc2kafka-service.sh, which fills in the
+# __USER__ / __WORKDIR__ / __LOGFILE__ placeholders below for this machine.
+Description=hcpy MQTT to Kafka (Avro) bridge
+Documentation=https://github.com/srmadscience/hcpy
+# We talk to a local MQTT broker and a remote Kafka cluster; wait for the
+# network stack to be up before starting.
+After=network-online.target
+Wants=network-online.target
+# If it dies more than 5 times in 60s, stop trying (so `systemctl status`
+# shows the problem instead of thrashing forever).
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+# run-hc2kafka.sh activates the project venv (venv/ or .venv/), checks the
+# Kafka deps, and exec's hc2kafka.py so SIGTERM/SIGINT reach Python directly
+# for a clean shutdown. It cd's to its own dir, so the relative venv +
+# config.ini paths resolve regardless of how systemd launches it.
+ExecStart=__WORKDIR__/run-hc2kafka.sh
+
+# Python environment: a login shell is NOT used, so make the interpreter
+# behave predictably under systemd.
+#   - HOME is needed so ~ (and the log path below) resolve.
+#   - PYTHONUNBUFFERED keeps stdout/stderr flowing into the log in real time
+#     instead of being block-buffered when not attached to a tty.
+# The venv itself is activated inside run-hc2kafka.sh, which is the single
+# source of truth for which interpreter/deps are used.
+Environment=HOME=__HOME__
+Environment=PYTHONUNBUFFERED=1
+
+# Keep the bridge alive across MQTT/Kafka blips and crashes.
+Restart=on-failure
+RestartSec=5
+
+# Send stdout + stderr to the requested log file (appended, not truncated, so
+# history survives restarts). Also tag journald lines for `journalctl -u`.
+StandardOutput=append:__LOGFILE__
+StandardError=append:__LOGFILE__
+SyslogIdentifier=hc2kafka
+
+# Light hardening. The bridge only needs to write its working dir and its log.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# ReadWritePaths punches writable holes through ProtectSystem/ProtectHome for
+# just these paths (the log lives under the otherwise read-only home).
+ReadWritePaths=__WORKDIR__ __LOGFILE__
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

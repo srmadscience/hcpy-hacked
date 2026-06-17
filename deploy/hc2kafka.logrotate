@@ -1,0 +1,20 @@
+# logrotate config for the hc2kafka bridge log.
+# Installed to /etc/logrotate.d/hc2kafka by deploy/install-hc2kafka-service.sh,
+# which fills in the __USER__ / __LOGFILE__ placeholders.
+__LOGFILE__ {
+    # Rotate weekly, but also if it gets large, whichever comes first.
+    weekly
+    maxsize 50M
+    # Keep ~2 months of history.
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # systemd's `append:` holds the file open; copytruncate rotates in place
+    # (copy then truncate the original) so the open fd keeps writing to the
+    # same inode -- no service restart needed.
+    copytruncate
+    # Recreate with sane ownership if it ever disappears.
+    create 0644 __USER__ __USER__
+}
