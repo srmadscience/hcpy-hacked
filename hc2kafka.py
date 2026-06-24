@@ -13,6 +13,8 @@
 # "bsh_common_status_doorstate". We reload config/devices.json to map that back
 # to the original "BSH.Common.Status.DoorState".
 import json
+import os
+import socket
 import ssl
 import sys
 import time
@@ -268,7 +270,12 @@ def hc2kafka(
         except Exception as e:
             print(now(), "ERROR processing", msg.topic, e, file=sys.stderr, flush=True)
 
-    client = mqtt.Client(kafka_clientname)
+    # Make the MQTT client-id unique per process. A fixed id means two instances
+    # (e.g. the systemd service plus a manual run, or a restart overlap) connect
+    # with the same id and the broker evicts each in turn -- an endless
+    # connect/disconnect (rc 7) fight. host+pid guarantees no collision.
+    mqtt_client_id = f"{kafka_clientname}-{socket.gethostname()}-{os.getpid()}"
+    client = mqtt.Client(mqtt_client_id)
     if mqtt_username and mqtt_password:
         client.username_pw_set(mqtt_username, mqtt_password)
     if mqtt_ssl:

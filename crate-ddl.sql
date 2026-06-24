@@ -54,3 +54,20 @@ CREATE TABLE IF NOT EXISTS homeconnect.bridge (
     "event_time"   TIMESTAMP WITH TIME ZONE GENERATED ALWAYS AS (CAST("ts_epoch_ms" AS TIMESTAMP WITH TIME ZONE)),
     PRIMARY KEY ("device", "property_raw", "event_time")
 );
+CREATE OR REPLACE VIEW homeconnect.activity_per_day AS
+SELECT  DATE_BIN('1 days'::INTERVAL, d."event_time", 0) wash_day ,value, count(*) mins_active
+  , CASE value
+  WHEN 'Intensiv70' ThEN 1.4 / 140
+  WHEN 'Auto2' ThEN 1.2 / 135
+  WHEN 'Eco50' ThEN 1.1 / 270
+  WHEN 'Quick65' ThEN 1.2 / 62
+  ELSE 0 END * count(*) kwh
+FROM "homeconnect"."dishwasher"  d
+WHERE property = 'BSH.Common.Root.ActiveProgram'
+AND value != 'None'
+GROUP BY DATE_BIN('1 days'::INTERVAL, d."event_time", 0),value;
+
+CREATE OR REPLACE VIEW homeconnect.kwh_per_day AS
+SELECT wash_day, sum(kwh) kwh
+FROM "homeconnect"."activity_per_day"
+GROUP BY wash_day;
