@@ -11,5 +11,9 @@ __*
 *.zip
 *.ini
 
+# Editor / OS junk
+.DS_Store
+.idea/
+
 # hc2kafka store-and-forward buffer (buffered/replayed record batches)
 config/outbox/
