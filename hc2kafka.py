@@ -17,6 +17,7 @@ import os
 import socket
 import ssl
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -33,6 +34,7 @@ from confluent_kafka.serialization import (
 )
 
 from HCSocket import now
+from outbox import Outbox, drain
 
 # Avro schema for every record. Per-device topics each register this under their
 # own "<topic>-value" subject; the schema itself is shared.
@@ -63,6 +65,67 @@ _FALSE = {"false", "off", "0", "no"}
 
 def kprint(*args):
     print(now(), *args, flush=True)
+
+
+class KafkaSink:
+    """Adapter over the confluent-kafka Producer that ``outbox.drain`` drives.
+
+    It exposes the small interface ``drain`` expects
+    (``produce_one`` / ``flush`` / ``reset_delivery_errors`` /
+    ``delivery_errors``) plus ``kafka_up`` for the health probe. Avro
+    serialization happens here, at produce time, so buffered records stay as
+    plain dicts on disk until Kafka (and the Schema Registry) are back --
+    serializing needs the registry, which is typically down whenever Kafka is.
+    """
+
+    def __init__(self, producer, avro_serializer, key_serializer, debug=False):
+        self.producer = producer
+        self.avro_serializer = avro_serializer
+        self.key_serializer = key_serializer
+        self.debug = debug
+        self.delivery_errors = 0
+        self.last_error = None
+
+    def reset_delivery_errors(self):
+        self.delivery_errors = 0
+
+    def _on_delivery(self, err, msg):
+        if err is not None:
+            self.delivery_errors += 1
+            self.last_error = err
+            kprint(f"ERROR kafka delivery failed: {err}")
+        elif self.debug:
+            kprint(f"delivered to {msg.topic()} [{msg.partition()}]@{msg.offset()}")
+
+    def produce_one(self, topic, key, value):
+        """Serialize and queue one record. Synchronous failures bump
+        ``delivery_errors`` rather than raising, so callers can buffer instead."""
+        try:
+            self.producer.produce(
+                topic=topic,
+                key=self.key_serializer(key, SerializationContext(topic, MessageField.KEY)),
+                value=self.avro_serializer(
+                    value, SerializationContext(topic, MessageField.VALUE)
+                ),
+                on_delivery=self._on_delivery,
+            )
+            self.producer.poll(0)
+        except Exception as e:
+            # A full local queue (BufferError) or a Schema Registry lookup
+            # failure both surface synchronously here; treat either as
+            # "Kafka unavailable" so the record gets buffered to the outbox.
+            self.delivery_errors += 1
+            self.last_error = e
+
+    def flush(self, timeout=30.0):
+        return self.producer.flush(timeout)
+
+    def kafka_up(self, timeout=5.0):
+        try:
+            self.producer.list_topics(timeout=timeout)
+            return True
+        except Exception:
+            return False
 
 
 def build_name_lookup(devices_file):
@@ -154,6 +217,12 @@ def parse_topic(topic, mqtt_prefix):
 @click.option("--kafka_bootstrap", default="badger:9092")
 @click.option("--schema_registry_url", default="http://badger:8081")
 @click.option("--kafka_topic_prefix", default="homeconnect.")
+@click.option("--buffer_dir", default="config/outbox",
+              help="Directory for store-and-forward buffering when Kafka is down.")
+@click.option("--drain_interval", default=15.0, type=float,
+              help="Seconds between attempts to replay the outbox backlog.")
+@click.option("--kafka_probe_timeout", default=5.0, type=float,
+              help="Timeout (s) for the metadata probe that checks Kafka is up.")
 @click.option("--debug/--no-debug", default=False)
 @click_config_file.configuration_option()
 def hc2kafka(
@@ -171,6 +240,9 @@ def hc2kafka(
     kafka_bootstrap: str,
     schema_registry_url: str,
     kafka_topic_prefix: str,
+    buffer_dir: str,
+    drain_interval: float,
+    kafka_probe_timeout: float,
     debug: bool,
 ):
     name_lookup = build_name_lookup(devices_file)
@@ -181,15 +253,40 @@ def hc2kafka(
     avro_serializer = AvroSerializer(schema_registry, VALUE_SCHEMA)
     key_serializer = StringSerializer("utf_8")
     producer = Producer({"bootstrap.servers": kafka_bootstrap})
+    sink = KafkaSink(producer, avro_serializer, key_serializer, debug=debug)
 
-    def on_delivery(err, msg):
-        if err is not None:
-            kprint(f"ERROR kafka delivery failed: {err}")
-        elif debug:
-            kprint(f"delivered to {msg.topic()} [{msg.partition()}]@{msg.offset()}")
+    # --- Store-and-forward outbox -------------------------------------------
+    # If Kafka (or the Schema Registry) is unreachable, records are buffered to
+    # disk and replayed later instead of being dropped. A background thread
+    # drains the backlog whenever Kafka is back; while any backlog exists new
+    # records are buffered too, so replay preserves per-device order.
+    outbox = Outbox(buffer_dir)
 
     def topic_for(device):
         return f"{kafka_topic_prefix}{device}"
+
+    def try_drain():
+        if not outbox.pending_files():
+            return
+        if not sink.kafka_up(kafka_probe_timeout):
+            return
+        sent = drain(sink, outbox)
+        if sent:
+            kprint(
+                f"drained {len(sent)} file(s), {sum(sent.values())} record(s) "
+                f"from outbox {buffer_dir}"
+            )
+        remaining = len(outbox.pending_files())
+        if remaining:
+            kprint(f"WARN {remaining} outbox file(s) still pending")
+
+    def drain_loop():
+        while True:
+            time.sleep(drain_interval)
+            try:
+                try_drain()
+            except Exception as e:
+                kprint(f"WARN outbox drain error: {e}")
 
     def readable_property(device, raw_property):
         if raw_property == "LWT":
@@ -251,15 +348,16 @@ def hc2kafka(
             }
 
             topic = topic_for(device)
-            producer.produce(
-                topic=topic,
-                key=key_serializer(device, SerializationContext(topic, MessageField.KEY)),
-                value=avro_serializer(
-                    record, SerializationContext(topic, MessageField.VALUE)
-                ),
-                on_delivery=on_delivery,
-            )
-            producer.poll(0)
+            if outbox.pending_files():
+                # A backlog is being replayed; buffer this record too so it
+                # can't overtake the older ones still waiting on disk.
+                outbox.write(topic, [(device, record)])
+            else:
+                before = sink.delivery_errors
+                sink.produce_one(topic, device, record)
+                if sink.delivery_errors > before:
+                    kprint(f"WARN kafka produce failed, buffering: {sink.last_error}")
+                    outbox.write(topic, [(device, record)])
             # Space records by >=1ms so every record gets a distinct ts_epoch_ms
             # (and therefore a distinct event_time). This prevents the CrateDB
             # primary key (device, property_raw, event_time) from colliding when
@@ -292,6 +390,14 @@ def hc2kafka(
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
+
+    pending = len(outbox.pending_files())
+    if pending:
+        kprint(f"outbox {buffer_dir} has {pending} pending file(s) from a previous run")
+
+    # Replay backlog and keep retrying it on an interval, independent of whether
+    # new MQTT messages are arriving.
+    threading.Thread(target=drain_loop, name="outbox-drain", daemon=True).start()
 
     kprint(f"connecting to MQTT {mqtt_host}:{mqtt_port}, producing to {kafka_bootstrap}")
     client.connect(host=mqtt_host, port=mqtt_port, keepalive=70)

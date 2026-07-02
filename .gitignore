@@ -10,3 +10,6 @@ __*
 *.json
 *.zip
 *.ini
+
+# hc2kafka store-and-forward buffer (buffered/replayed record batches)
+config/outbox/
