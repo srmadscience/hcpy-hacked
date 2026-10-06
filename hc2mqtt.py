@@ -2,6 +2,7 @@
 # Contact Bosh-Siemens Home Connect devices
 # and connect their messages to the mqtt server
 import json
+import os
 import ssl
 import sys
 import time
@@ -37,6 +38,12 @@ def hcprint(*args):
 @click.option("--ha-discovery", is_flag=True)
 @click.option("--discovery_file", default="config/discovery.yaml")
 @click.option("--events_as_sensors", is_flag=True)
+@click.option(
+    "--watchdog_timeout",
+    default=43200,
+    type=int,
+    help="Reconnect a device that has sent nothing for this many seconds (0 disables).",
+)
 @click_config_file.configuration_option()
 def hc2mqtt(
     devices_file: str,
@@ -55,6 +62,7 @@ def hc2mqtt(
     ha_discovery: bool,
     discovery_file: str,
     events_as_sensors: bool,
+    watchdog_timeout: int,
 ):
 
     def on_connect(client, userdata, flags, rc):
@@ -137,7 +145,7 @@ def hc2mqtt(
         f"Hello {devices_file=} {mqtt_host=} {mqtt_prefix=} "
         f"{mqtt_port=} {mqtt_username=} {mqtt_password=} "
         f"{mqtt_ssl=} {mqtt_cafile=} {mqtt_certfile=} {mqtt_keyfile=} {mqtt_clientname=}"
-        f"{domain_suffix=} {debug=} {ha_discovery=}"
+        f"{domain_suffix=} {debug=} {ha_discovery=} {watchdog_timeout=}"
     )
 
     with open(devices_file, "r") as f:
@@ -168,7 +176,8 @@ def hc2mqtt(
     for device in devices:
         mqtt_topic = mqtt_prefix + device["name"]
         thread = Thread(
-            target=client_connect, args=(client, device, mqtt_topic, domain_suffix, debug)
+            target=client_connect,
+            args=(client, device, mqtt_topic, domain_suffix, debug, watchdog_timeout),
         )
         thread.start()
 
@@ -179,12 +188,57 @@ global dev
 dev = {}
 
 
-def client_connect(client, device, mqtt_topic, domain_suffix, debug):
+# How long a watchdog-initiated close may take before the receive thread is
+# assumed to be wedged and the whole process is exited instead.
+WATCHDOG_CLOSE_GRACE = 120
+
+
+def client_connect(client, device, mqtt_topic, domain_suffix, debug, watchdog_timeout):
     host = device["host"]
     name = device["name"]
     mydevice = None
+    # Shared with the watchdog thread: when the last frame arrived from the
+    # device, and when the watchdog asked the current connection to close.
+    last_rx = time.monotonic()
+    watchdog_closed_at = None
+
+    def watchdog():
+        # A connection can stay up (TCP alive, pings answered) while the
+        # appliance stops pushing data to it, so the socket's own ping/timeout
+        # never fires and LWT stays "online". Force a reconnect after a silence
+        # longer than any normal idle period.
+        nonlocal watchdog_closed_at
+        while True:
+            time.sleep(60)
+            if watchdog_closed_at is not None:
+                if time.monotonic() - watchdog_closed_at > WATCHDOG_CLOSE_GRACE:
+                    print(
+                        now(),
+                        name,
+                        "ERROR watchdog: connection did not close, exiting so it can restart",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    os._exit(1)
+                continue
+            if mydevice is None or not mydevice.connected:
+                continue
+            silent = time.monotonic() - last_rx
+            if silent > watchdog_timeout:
+                hcprint(name, f"watchdog: nothing received for {silent:.0f}s, reconnecting")
+                watchdog_closed_at = time.monotonic()
+                client.publish(f"{mqtt_topic}/LWT", "offline", retain=True)
+                try:
+                    mydevice.ws.ws.close()
+                except Exception as e:
+                    print(now(), name, "ERROR watchdog close", e, file=sys.stderr, flush=True)
+
+    if watchdog_timeout > 0:
+        Thread(target=watchdog, daemon=True).start()
 
     def on_message(msg):
+        nonlocal last_rx
+        last_rx = time.monotonic()
         try:
             if msg is not None:
                 if len(msg) > 0:
@@ -248,6 +302,8 @@ def client_connect(client, device, mqtt_topic, domain_suffix, debug):
             print(repr(e))
 
     def on_open(ws):
+        nonlocal last_rx
+        last_rx = time.monotonic()
         client.publish(f"{mqtt_topic}/LWT", "online", retain=True)
 
     def on_close(ws, code, message):
@@ -266,6 +322,8 @@ def client_connect(client, device, mqtt_topic, domain_suffix, debug):
         except Exception as e:
             print(now(), device["name"], "ERROR", e, file=sys.stderr, flush=True)
             client.publish(f"{mqtt_topic}/LWT", "offline", retain=True)
+        # run_forever has returned, so any watchdog-requested close completed.
+        watchdog_closed_at = None
 
         time.sleep(57)
 

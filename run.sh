@@ -19,6 +19,9 @@ if [ -f ${CONFIG_PATH} ]; then
         HCPY_DOMAIN_SUFFIX="$(bashio::config 'HCPY_DOMAIN_SUFFIX')"
         HCPY_DEBUG="$(bashio::config 'HCPY_DEBUG')"
 	HCPY_EVENTS_AS_SENSORS="$(bashio::config 'HCPY_EVENTS_AS_SENSORS')"
+        if bashio::config.has_value 'HCPY_WATCHDOG_TIMEOUT'; then
+                HCPY_WATCHDOG_TIMEOUT="$(bashio::config 'HCPY_WATCHDOG_TIMEOUT')"
+        fi
 
         set +o allexport
         

@@ -32,6 +32,7 @@ options:
   HCPY_DOMAIN_SUFFIX: ""
   HCPY_DEBUG: false
   HCPY_EVENTS_AS_SENSORS: false
+  HCPY_WATCHDOG_TIMEOUT: 43200
 schema:
   HCPY_DEVICES_FILE: str
   HCPY_DISCOVERY_FILE: str
@@ -49,6 +50,7 @@ schema:
   HCPY_HA_DISCOVERY: bool?
   HCPY_DEBUG: bool?
   HCPY_EVENTS_AS_SENSORS: bool?
+  HCPY_WATCHDOG_TIMEOUT: int?
 startup: services
 discovery:
   - hcpy
