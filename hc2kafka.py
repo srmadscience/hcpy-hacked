@@ -359,7 +359,7 @@ def hc2kafka(
                     kprint(f"WARN kafka produce failed, buffering: {sink.last_error}")
                     outbox.write(topic, [(device, record)])
             # Space records by >=1ms so every record gets a distinct ts_epoch_ms
-            # (and therefore a distinct event_time). This prevents the CrateDB
+            # (and therefore a distinct event_time). This prevents the database
             # primary key (device, property_raw, event_time) from colliding when
             # the same property is reported twice within the same millisecond.
             time.sleep(0.001)

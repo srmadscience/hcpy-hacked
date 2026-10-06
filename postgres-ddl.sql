@@ -1,9 +1,7 @@
 -- PostgreSQL DDL for the records produced by hc2kafka.py.
 --
--- This is the PostgreSQL port of crate-ddl.sql; keep the two in sync.
---
 -- One table per Kafka topic (one per appliance, plus the bridge LWT topic).
--- The matching crate-sink-*.json JDBC sink connectors run with
+-- The matching postgres-sink-*.json JDBC sink connectors run with
 -- "auto.create": "false", so these tables must exist before the connectors
 -- start. Columns mirror the Avro schema registered by hc2kafka.py under the
 -- "<topic>-value" subject.
@@ -16,16 +14,13 @@
 -- by property_raw, so they coexist; only the exact same property reported twice
 -- in the same millisecond would collide (and be rejected by the insert).
 --
--- The tables are intentionally NOT partitioned, matching the CrateDB version:
--- the Confluent JDBC sink checks table existence via JDBC metadata before
--- inserting, and a bare PostgreSQL partitioned parent adds nothing here.
+-- The tables are intentionally NOT partitioned: the Confluent JDBC sink checks
+-- table existence via JDBC metadata before inserting, and a bare PostgreSQL
+-- partitioned parent adds nothing here.
 --
--- Differences from crate-ddl.sql:
---   * event_time is a STORED generated column (PostgreSQL has no virtual
---     generated columns) built with to_timestamp(), since casting a bigint
---     straight to timestamptz is not allowed.
---   * DATE_BIN() is PostgreSQL 14+; the day bucket uses date_trunc('day', ...)
---     instead, which is equivalent for a 1-day bin on the epoch origin.
+-- event_time is a STORED generated column built with to_timestamp(), since
+-- casting a bigint straight to timestamptz is not allowed. The day bucket uses
+-- date_trunc('day', ...).
 
 CREATE SCHEMA IF NOT EXISTS homeconnect;
 
