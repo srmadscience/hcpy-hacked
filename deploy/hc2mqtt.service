@@ -1,0 +1,43 @@
+[Unit]
+# hcpy appliance -> MQTT bridge.
+# Install with `deploy/install-service.sh hc2mqtt`, which fills in the
+# __USER__ / __WORKDIR__ / __PYTHON__ / __LOGFILE__ placeholders below for this
+# machine. WORKDIR is the hcpy checkout holding config.ini and config/devices.json.
+Description=hcpy Home Connect to MQTT bridge
+Documentation=https://github.com/srmadscience/hcpy
+# We talk to appliances on the LAN and to an MQTT broker; wait for the network
+# stack to be up before starting.
+After=network-online.target mosquitto.service
+Wants=network-online.target
+# Never stop retrying: an early start can fail before the network is up, and a
+# burst limit would leave the service dead after a reboot.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+ExecStart=__PYTHON__ hc2mqtt.py --config config.ini
+
+Environment=HOME=__HOME__
+# Keep stdout/stderr flowing into the log in real time.
+Environment=PYTHONUNBUFFERED=1
+
+# Reconnect loops handle device/broker blips; this covers crashes and the
+# watchdog's deliberate exit when a device connection is wedged.
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=append:__LOGFILE__
+StandardError=append:__LOGFILE__
+SyslogIdentifier=hc2mqtt
+
+# Light hardening. The bridge only needs to write its working dir and its log.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__WORKDIR__ __LOGFILE__
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

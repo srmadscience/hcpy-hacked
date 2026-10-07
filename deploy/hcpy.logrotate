@@ -1,5 +1,5 @@
-# logrotate config for the hc2kafka bridge log.
-# Installed to /etc/logrotate.d/hc2kafka by deploy/install-hc2kafka-service.sh,
+# logrotate config for an hcpy bridge log (hc2kafka or hc2mqtt).
+# Installed to /etc/logrotate.d/<service> by deploy/install-service.sh,
 # which fills in the __USER__ / __LOGFILE__ placeholders.
 __LOGFILE__ {
     # Rotate weekly, but also if it gets large, whichever comes first.

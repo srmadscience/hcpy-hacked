@@ -1,6 +1,6 @@
 [Unit]
 # hcpy MQTT -> Kafka (Avro) bridge.
-# Install with deploy/install-hc2kafka-service.sh, which fills in the
+# Install with `deploy/install-service.sh hc2kafka`, which fills in the
 # __USER__ / __WORKDIR__ / __LOGFILE__ placeholders below for this machine.
 Description=hcpy MQTT to Kafka (Avro) bridge
 Documentation=https://github.com/srmadscience/hcpy
@@ -8,10 +8,10 @@ Documentation=https://github.com/srmadscience/hcpy
 # network stack to be up before starting.
 After=network-online.target
 Wants=network-online.target
-# If it dies more than 5 times in 60s, stop trying (so `systemctl status`
-# shows the problem instead of thrashing forever).
-StartLimitIntervalSec=60
-StartLimitBurst=5
+# Never stop retrying. network-online.target does not wait for the Pi's
+# network on every boot, so the first starts can fail with "Network is
+# unreachable"; a burst limit then left the service dead after a reboot.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -35,7 +35,7 @@ Environment=PYTHONUNBUFFERED=1
 
 # Keep the bridge alive across MQTT/Kafka blips and crashes.
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 
 # Send stdout + stderr to the requested log file (appended, not truncated, so
 # history survives restarts). Also tag journald lines for `journalctl -u`.
